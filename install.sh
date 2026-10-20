@@ -187,7 +187,7 @@ install_serial_bind_rule() {
     modprobe option >/dev/null 2>&1 || true
     if [ -d /sys/bus/usb-serial/drivers/option1 ]; then
         for _pid in 01a8 01a9 0301 0302; do
-            echo "33f8 $_pid" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
+            echo "33f8 $_pid ff" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
         done
     fi
     udevadm trigger --subsystem-match=usb >/dev/null 2>&1 || true

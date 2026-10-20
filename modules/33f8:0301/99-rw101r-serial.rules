@@ -2,20 +2,22 @@
 #
 # The FCC challenge on this module answers only on its serial AT port, so the
 # option driver must have claimed the device. Linux 6.18 added 33f8:01a8, 01a9,
-# 0301 and 0302 to that driver's id table in commit 523bf0a59e67, also present
-# in the stable backports; only 33f8:01a4 is older. On an earlier kernel the
-# driver never binds, no /dev/ttyUSB is created, and the unlock cannot run.
+# 0301 and 0302 to that driver's id table in commit 523bf0a59e67 with interface
+# class 0xff filtering, also present in stable backports; only 33f8:01a4 is older.
 #
-# Harmless on a newer kernel: the driver already matches these ids by modalias,
-# and writing an id it already knows is a no-op. The modprobe is folded into the
-# rule because /sys/bus/usb-serial/drivers/option1/ does not exist until the
-# option module is loaded, so a rule that only writes new_id races the module
-# load at boot.
+# Crucially, any dynamic ID added to /sys/bus/usb-serial/drivers/option1/new_id MUST
+# specify the interface class 0xff ("echo 33f8 $PID ff"). Without the trailing class,
+# option claims all interfaces including 0 (MBIM control) and 1 (MBIM data),
+# breaking cdc_mbim.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="33f8", ATTR{idProduct}=="01a8", \
-  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 01a8 > /sys/bus/usb-serial/drivers/option1/new_id'"
+  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 01a8 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="33f8", ATTR{idProduct}=="01a9", \
-  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 01a9 > /sys/bus/usb-serial/drivers/option1/new_id'"
+  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 01a9 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="33f8", ATTR{idProduct}=="0301", \
-  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 0301 > /sys/bus/usb-serial/drivers/option1/new_id'"
+  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 0301 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="33f8", ATTR{idProduct}=="0302", \
-  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 0302 > /sys/bus/usb-serial/drivers/option1/new_id'"
+  RUN+="/bin/sh -c '/sbin/modprobe option; echo 33f8 0302 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
+
+# Tag the AT port for ModemManager and create a deterministic symlink
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="33f8", ATTRS{idProduct}=="01a4|01a8|01a9|0301|0302", \
+  ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="ttyWWAN-AT", ENV{ID_MM_PORT_TYPE_AT}="1"

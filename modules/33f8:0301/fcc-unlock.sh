@@ -45,31 +45,44 @@ shift
 
 # this firmware answers the FCC challenge on its serial AT port; the wwan AT
 # service returns ERROR for at+gtfcclockgen on 33f8:0301
-for P in "$@"; do
-  echo "$P" | grep -q '^ttyUSB' && { AT="$P"; break; }
+# Prefer the dedicated /dev/ttyWWAN-AT symlink if present, or wait briefly for udev
+for _ in $(seq 1 20); do
+  [ -c /dev/ttyWWAN-AT ] && { AT="ttyWWAN-AT"; break; }
+  sleep 0.1
+done
+
+# Otherwise, inspect ports passed by ModemManager
+[ -n "$AT" ] || for P in "$@"; do
+  echo "$P" | grep -q '^ttyUSB' && [ -c "/dev/$P" ] && { AT="$P"; break; }
 done
 # fall back to a wwan AT port for the variants that expose one
 [ -n "$AT" ] || for P in "$@"; do
   grep -q AT "/sys/class/wwan/$P/type" 2>/dev/null || echo "$P" | grep -qi AT && { AT="$P"; break; }
 done
 
-# if the option driver has not claimed the device, ModemManager never saw a
-# ttyUSB to pass us. Bind it here and re-check: kernels before 6.18 (and the
-# stable backports) do not know 33f8:01a8/01a9/0301/0302. The bundled
-# 99-rw101r-serial.rules makes this persistent; this is the fallback for a
-# system that does not have it installed yet.
+# If the option driver has not claimed the device, ModemManager never saw a
+# ttyUSB to pass us. Bind it here with interface class 0xff filtering.
+# Linux 6.18 and stable backports include 33f8:01a8/01a9/0301/0302 natively.
+# On older kernels, writing new_id with class 0xff avoids option claiming
+# interfaces 0 and 1, preserving them for cdc_mbim.
 if [ -z "$AT" ] && [ -w /sys/bus/usb-serial ]; then
   log "no AT port from ModemManager; binding the option driver"
   modprobe option >/dev/null 2>&1 || true
   if [ -d /sys/bus/usb-serial/drivers/option1 ]; then
     for PID in 01a8 01a9 0301 0302; do
-      echo "33f8 $PID" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
+      echo "33f8 $PID ff" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
     done
   fi
   n=1
   while [ "$n" -le 6 ]; do
+    [ -c /dev/ttyWWAN-AT ] && { AT="ttyWWAN-AT"; break; }
     for D in /dev/ttyUSB*; do
-      [ -e "$D" ] && { AT="${D#/dev/}"; break; }
+      if [ -c "$D" ]; then
+        DEV_SYS="$(udevadm info -q path -n "$D" 2>/dev/null)" || true
+        case "$DEV_SYS" in
+          *33f8*) AT="${D#/dev/}"; break ;;
+        esac
+      fi
     done
     [ -n "$AT" ] && break
     sleep 0.2
@@ -79,13 +92,19 @@ if [ -z "$AT" ] && [ -w /sys/bus/usb-serial ]; then
 fi
 
 [ -n "$AT" ] || { log "no AT port; the option driver could not be bound"; exit 2; }
+[ -c "/dev/$AT" ] || { log "AT port /dev/$AT is not a character device"; exit 2; }
 DEVICE="/dev/$AT"
 
 at_command() {
-    exec 9<>"$DEVICE"
+    [ -c "$DEVICE" ] || return 1
+    exec 9<>"$DEVICE" 2>/dev/null || return 1
+    if [ ! -c "$DEVICE" ]; then
+      rm -f "$DEVICE" 2>/dev/null || true
+      return 1
+    fi
     printf "%s\r" "$1" >&9
-    read answer <&9
-    read answer <&9
+    read -t 2 answer <&9 || true
+    read -t 2 answer <&9 || true
     echo "$answer"
     exec 9>&-
 }
